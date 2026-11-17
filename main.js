@@ -68,8 +68,10 @@ function buildThinkingParams(parsed, reasoning) {
     if ((parsed?.port ?? '') === '11434') {
         return { think: !off }
     }
-    // OpenAI / Kimi / Gemini 兼容层 / 其他网关:reasoning_effort
-    return { reasoning_effort: off ? 'low' : 'high' }
+    // OpenAI / Kimi / Gemini 兼容层 / 中转网关:reasoning_effort
+    // 注意 "low" 只是最低档思考,真正关闭要用 "none"(多数网关与 Gemini 均支持);
+    // 个别严格接口不认 "none",由 translate() 在收到 400 时自动退回 "low" 重试
+    return { reasoning_effort: off ? 'none' : 'high' }
 }
 
 function buildHeaders(apiKey) {
@@ -295,17 +297,32 @@ async function translate(text, from, to, options) {
     // 默认不发送(部分服务对非推理模型收到思考参数会报错)
     const body = { model: wanted, messages, ...buildThinkingParams(parsed, reasoning) }
 
-    if (stream !== 'false') {
-        try {
-            return await streamChat(chatUrl, headers, body, setResult)
-        } catch (e) {
-            if (!e?.useFallback) {
-                throw e
+    // 单个请求体内执行一次:优先流式,跨域不可用则降级为非流式
+    const attempt = async (requestBody) => {
+        if (stream !== 'false') {
+            try {
+                return await streamChat(chatUrl, headers, requestBody, setResult)
+            } catch (e) {
+                if (!e?.useFallback) {
+                    throw e
+                }
+                // 跨域等原因导致窗口 fetch 不可用(服务端未返回跨域响应头),
+                // 自动降级为非流式请求,期间给出提示避免界面看起来卡住
+                setResult?.('⏳ 该服务暂不支持流式输出(缺少跨域响应头),正在等待完整回复…')
             }
-            // 跨域等原因导致窗口 fetch 不可用(服务端未返回跨域响应头),
-            // 自动降级为非流式请求,期间给出提示避免界面看起来卡住
-            setResult?.('⏳ 该服务暂不支持流式输出(缺少跨域响应头),正在等待完整回复…')
         }
+        return await chatOnce(chatUrl, headers, requestBody, tauriFetch)
     }
-    return await chatOnce(chatUrl, headers, body, tauriFetch)
+
+    try {
+        return await attempt(body)
+    } catch (e) {
+        // 个别接口不认 reasoning_effort="none"(返回 400/422),退回最低档 "low" 重试一次。
+        // 这类模型本身就无法完全关闭思考,退档能显著减少思考量且不至于直接报错。
+        const badRequest = /Http Status: (400|422)/.test(String(e))
+        if (badRequest && body.reasoning_effort === 'none') {
+            return await attempt({ ...body, reasoning_effort: 'low' })
+        }
+        throw e
+    }
 }

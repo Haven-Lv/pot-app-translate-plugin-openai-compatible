@@ -251,7 +251,7 @@ async function main() {
             ).then(({ calls }) => calls[0].options.body.payload)
         assert.strictEqual((await mk(undefined)).reasoning_effort, undefined, '未配置时不应发送 reasoning_effort')
         assert.strictEqual((await mk('auto')).reasoning_effort, undefined, 'auto 不应发送 reasoning_effort')
-        assert.strictEqual((await mk('low')).reasoning_effort, 'low')
+        assert.strictEqual((await mk('low')).reasoning_effort, 'none', '关闭思考应发 none(真正关闭),而非最低档 low')
         assert.strictEqual((await mk('high')).reasoning_effort, 'high')
         // 旧版本残留的 requestArguments 配置应被彻底忽略
         const legacy = await run(
@@ -288,18 +288,53 @@ async function main() {
         p = await send('http://127.0.0.1:11434/v1', 'low')
         assert.strictEqual(p.think, false, 'Ollama 默认端口应发 think=false')
         p = await send('https://generativelanguage.googleapis.com/v1beta/openai', 'low')
-        assert.strictEqual(p.reasoning_effort, 'low', 'Gemini 兼容层应发 reasoning_effort')
+        assert.strictEqual(p.reasoning_effort, 'none', 'Gemini 兼容层应发 reasoning_effort=none 关闭思考')
         assert.ok(!('thinking' in p) && !('enable_thinking' in p), 'Gemini 不应收其他思考字段')
         p = await send('https://api.openai.com/v1', 'low')
-        assert.strictEqual(p.reasoning_effort, 'low')
+        assert.strictEqual(p.reasoning_effort, 'none', 'OpenAI 关闭思考应发 none(不认时自动退回 low)')
         assert.ok(!('thinking' in p) && !('enable_thinking' in p) && !('think' in p), 'OpenAI 只应收 reasoning_effort')
-        // 用户网关(未知域名)行为保持不变
+        // 用户网关(未知域名,如 magpie)
         p = await send('http://127.0.0.1:3425/v1', 'low')
-        assert.strictEqual(p.reasoning_effort, 'low', '未知网关仍用 reasoning_effort')
+        assert.strictEqual(p.reasoning_effort, 'none', '未知网关关闭思考应发 none(实测 low 仍会思考)')
+        p = await send('http://127.0.0.1:3425/v1', 'high')
+        assert.strictEqual(p.reasoning_effort, 'high')
         p = await send('https://open.bigmodel.cn/api/paas/v4', 'auto')
         assert.ok(!('thinking' in p) && !('reasoning_effort' in p), 'auto 对已知厂商也应零参数')
     }
     console.log('✓ 思考参数按域名适配(GLM/DeepSeek/方舟/百炼/Ollama/Gemini/OpenAI/网关)')
+
+    // 10. none 不被接受时的回退:400/422 自动以 low 重试,其他错误不重试
+    {
+        let calls = 0
+        const handler = (url, options) => {
+            calls += 1
+            const effort = options.body.payload.reasoning_effort
+            if (calls === 1) {
+                assert.strictEqual(effort, 'none')
+                return { ok: false, status: 400, data: { error: { message: 'invalid reasoning_effort' } } }
+            }
+            assert.strictEqual(effort, 'low', '回退时应改用 low')
+            return okChoice('回退成功')
+        }
+        const { value } = await run(
+            { requestPath: 'https://x.example/v1', apiKey: 'sk', model: 'm', stream: 'false', reasoning: 'low' },
+            { tauriHandler: handler }
+        )
+        assert.strictEqual(value, '回退成功')
+        assert.strictEqual(calls, 2, '应恰好重试一次')
+
+        // 401 等非参数错误不应重试
+        let n = 0
+        await assert.rejects(
+            run(
+                { requestPath: 'https://x.example/v1', apiKey: 'sk', model: 'm', stream: 'false', reasoning: 'low' },
+                { tauriHandler: () => { n += 1; return { ok: false, status: 401, data: { error: 'bad key' } } } }
+            ),
+            (e) => String(e).includes('401')
+        )
+        assert.strictEqual(n, 1, '401 不应触发重试')
+    }
+    console.log('✓ none 不被接受时回退 low(400/422 重试一次,401 不重试)')
 
     console.log('\n全部通过 🎉')
 }

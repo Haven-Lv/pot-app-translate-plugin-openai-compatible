@@ -46,7 +46,7 @@
 | 服务地址 (API URL) | 服务商的 API 地址,支持域名、带 `/v1` 的地址或完整接口地址,详见上表 |
 | API 密钥 (API Key) | `sk-` 开头的密钥;本地服务(Ollama、LM Studio)可留空 |
 | 模型 | 模型名。**留空或填 `?`** 后随便翻译一句,可用模型列表会显示在翻译结果里;或直接手动填写已知模型名,如 `deepseek-chat` |
-| 思考力度 | **默认(不干预)**:不发送任何参数;**关闭思考(翻译更快)**:按服务地址自动选择对应写法;**深入思考**:开启思考并调到 high。注意:能否关闭取决于模型本身——各家都有"仅思考"模型(如 GLM-5.3、Kimi-K3)无法关闭,模型列表中已把这类模型标注为"思考无法关闭" |
+| 思考力度 | **默认(不干预)**:不发送任何参数;**关闭思考(翻译更快)**:按服务地址自动选择对应写法;**深入思考**:开启思考并调到 high。注意:①`low` 只是最低档思考,真正的关闭值是 `none`,插件已改用 `none`;②能否关闭最终取决于模型本身——各家都有"仅思考"模型(如 GLM-5.3、Kimi-K3)无法关闭,针对这类模型插件会退回最低档以减少思考量 |
 
 插件按服务地址自动适配各厂商的思考控制字段(未知域名/中转网关统一用 `reasoning_effort`,避免严格接口报错):
 
@@ -55,7 +55,7 @@
 | `deepseek.com` / `bigmodel.cn`(智谱) / `volces.com`(火山方舟) | `thinking: {"type": "disabled"}`;深入思考为 `enabled` + `reasoning_effort: "high"` |
 | `aliyuncs.com`(阿里百炼) | `enable_thinking: false` |
 | 端口 `11434`(Ollama 默认) | `think: false` |
-| 其他(OpenAI、Kimi、Gemini 兼容层、one-api 等) | `reasoning_effort: "low"` / `"high"` |
+| 其他(OpenAI、Kimi、Gemini 兼容层、中转网关如 magpie 等) | `reasoning_effort: "none"`(真正关闭)/ `"high"`;若接口不认 `none` 返回 400/422,插件自动退回 `"low"` 重试 |
 | 流式输出 | 默认开启;服务端不支持跨域流式时自动回退到非流式并提示,一般无需关闭 |
 
 > **流式输出的限制**:pot 网页环境里的流式请求要求服务端返回跨域(CORS)响应头。OpenAI、DeepSeek 等官方接口支持;部分本地网关/代理(如 magpie)不返回 CORS 头,插件会自动降级为非流式请求并显示「⏳ 正在等待完整回复」提示——这是插件体系下能做到的最优行为,不是故障。若你的网关可配置 CORS(允许 `https://tauri.localhost` 来源),开启后即可恢复流式。
@@ -80,6 +80,9 @@
 
 ```bash
 node test/smoke.js
+# 可选:对真实服务联调(校验关闭思考是否生效)
+POT_LIVE_BASE=http://127.0.0.1:3425/v1 POT_LIVE_KEY=your-key \
+POT_LIVE_MODEL=your-model node test/live.js
 ```
 
 > 注意:pot 通过 `eval(main.js + " translate")` 加载插件,`translate` 函数声明必须保持在 `main.js` 文件末尾。
